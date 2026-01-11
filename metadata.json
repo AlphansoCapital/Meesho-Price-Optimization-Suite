@@ -1,0 +1,7 @@
+{
+  "name": "Meesho Price Optimization Suite",
+  "description": "A high-performance tool for generating product image variants and tracking price/shipping optimizations using algorithmic cluster analysis.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
