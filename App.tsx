@@ -1,22 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import SynthesizerModule from './components/SynthesizerModule';
 import ValidatorModule from './components/ValidatorModule';
 import InsightsModule from './components/InsightsModule';
 import { AppSection, ImageVariant } from './types';
-import { getAllVariantsFromDB } from './services/imageService';
+import { getAllVariantsFromDB, clearAllVariantsFromDB } from './services/imageService';
 
 const App: React.FC = () => {
   const [activeSection, setActiveSection] = useState<AppSection>(AppSection.SYNTHESIZER);
   const [variants, setVariants] = useState<ImageVariant[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  // The clearKey acts as a version counter to force-remount modules and reset all internal states
+  const [clearKey, setClearKey] = useState(0);
 
   // Recovery System: Load history from DB on mount
   useEffect(() => {
     const loadHistory = async () => {
       try {
         const history = await getAllVariantsFromDB();
-        if (history.length > 0) {
+        if (history && history.length > 0) {
           setVariants(history.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
         }
       } catch (err) {
@@ -26,22 +28,35 @@ const App: React.FC = () => {
       }
     };
     loadHistory();
-  }, []);
+  }, [clearKey]); // Reload when clearKey changes (though handleClearHistory handles it manually)
 
-  const handleVariantsGenerated = (newVariants: ImageVariant[], autoNavigate: boolean) => {
+  const handleVariantsGenerated = useCallback((newVariants: ImageVariant[], autoNavigate: boolean) => {
     setVariants(prev => [...newVariants, ...prev]);
     if (autoNavigate) {
       setActiveSection(AppSection.VALIDATOR);
     }
-  };
+  }, []);
 
-  const handleValidationComplete = (updatedVariants: ImageVariant[]) => {
+  const handleValidationComplete = useCallback((updatedVariants: ImageVariant[]) => {
     setVariants(prev => {
-      // FIX: Explicitly typing the Map to ensure 'a' and 'b' in the sort function are recognized as ImageVariant instead of unknown
       const prevMap = new Map<string, ImageVariant>(prev.map(v => [v.id, v]));
       updatedVariants.forEach(v => prevMap.set(v.id, v));
       return Array.from(prevMap.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
     });
+  }, []);
+
+  const handleClearHistory = async () => {
+    try {
+      await clearAllVariantsFromDB();
+      setVariants([]);
+      // Incrementing clearKey forces all components with this key to unmount and remount
+      setClearKey(prev => prev + 1);
+      return true;
+    } catch (err) {
+      console.error("Failed to clear history:", err);
+      alert("Error clearing persistent storage. Check console for details.");
+      return false;
+    }
   };
 
   return (
@@ -68,33 +83,39 @@ const App: React.FC = () => {
         <div className="p-8 max-w-7xl mx-auto w-full">
           {activeSection === AppSection.SYNTHESIZER && (
             <SynthesizerModule 
+              key={`synth-${clearKey}`}
               onVariantsGenerated={handleVariantsGenerated} 
               existingVariants={variants}
+              onClearHistory={handleClearHistory}
             />
           )}
 
           {activeSection === AppSection.VALIDATOR && (
             <ValidatorModule 
+              key={`valid-${clearKey}`}
               variants={variants} 
               onValidationComplete={handleValidationComplete} 
             />
           )}
 
           {activeSection === AppSection.INSIGHTS && (
-            <InsightsModule variants={variants} />
+            <InsightsModule 
+              key={`insight-${clearKey}`}
+              variants={variants} 
+            />
           )}
 
           {activeSection === AppSection.SETTINGS && (
-            <div className="bg-white rounded-2xl p-12 border shadow-sm">
+            <div className="bg-white rounded-2xl p-12 border shadow-sm animate-fadeIn">
               <h2 className="text-2xl font-bold mb-4">RPA Environment Settings</h2>
               <div className="space-y-6">
                 <div className="p-4 border rounded-xl space-y-4">
                    <h3 className="font-bold text-gray-700">Hotkey Mappings</h3>
                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="flex justify-between p-2 bg-gray-50 rounded"><span>Set Upload Point</span> <kbd className="bg-white border rounded px-1">Numpad 1</kbd></div>
-                      <div className="flex justify-between p-2 bg-gray-50 rounded"><span>Set Price Field</span> <kbd className="bg-white border rounded px-1">Numpad 2</kbd></div>
-                      <div className="flex justify-between p-2 bg-gray-50 rounded"><span>Set Log Point</span> <kbd className="bg-white border rounded px-1">Numpad 3</kbd></div>
-                      <div className="flex justify-between p-2 bg-gray-50 rounded"><span>Start Automation</span> <kbd className="bg-white border rounded px-1">Numpad 7</kbd></div>
+                      <div className="flex justify-between p-2 bg-gray-50 rounded"><span>Set Upload Point</span> <kbd className="bg-white border rounded px-1 text-[10px]">Numpad 1</kbd></div>
+                      <div className="flex justify-between p-2 bg-gray-50 rounded"><span>Set Price Field</span> <kbd className="bg-white border rounded px-1 text-[10px]">Numpad 2</kbd></div>
+                      <div className="flex justify-between p-2 bg-gray-50 rounded"><span>Set Log Point</span> <kbd className="bg-white border rounded px-1 text-[10px]">Numpad 3</kbd></div>
+                      <div className="flex justify-between p-2 bg-gray-50 rounded"><span>Start Automation</span> <kbd className="bg-white border rounded px-1 text-[10px]">Numpad 7</kbd></div>
                    </div>
                 </div>
                 <div className="p-4 border rounded-xl">
@@ -105,6 +126,20 @@ const App: React.FC = () => {
                       <span>OPTIMIZED</span>
                       <span>AGGRESSIVE</span>
                    </div>
+                </div>
+                <div className="p-4 border-2 border-red-50 border-dashed rounded-xl">
+                   <h3 className="font-bold text-red-700 mb-2 text-sm uppercase">Advanced System Purge</h3>
+                   <p className="text-xs text-gray-500 mb-4 italic">Warning: This clears all persistent IndexedDB data and resets all module states immediately.</p>
+                   <button 
+                    onClick={() => {
+                      if(confirm("DANGER: This will permanently delete all variations and data. Continue?")) {
+                        handleClearHistory().then(success => success && alert("Full system reset successful."));
+                      }
+                    }}
+                    className="px-6 py-2 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 transition-colors shadow-lg active:scale-95"
+                   >
+                     Clear Permanent Database & Force Reset
+                   </button>
                 </div>
               </div>
             </div>
